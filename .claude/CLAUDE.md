@@ -14,6 +14,8 @@ Resume Matcher is an AI-powered application for tailoring resumes to job descrip
 | **Frontend** | Next.js 16 + React 19, Tailwind CSS v4 |
 | **Database** | TinyDB (JSON file storage) |
 | **PDF** | Headless Chromium via Playwright |
+| **Package Management** | npm (frontend), uv (backend) |
+| **Languages** | en, es, zh, ja, pt-BR |
 
 ---
 
@@ -95,6 +97,10 @@ npm run dev:frontend  # Next.js on :3000
 npm run lint          # Lint frontend
 npm run format        # Format with Prettier
 
+# Testing
+npm run test          # Frontend tests (Vitest)
+cd apps/backend && uv run pytest  # Backend tests
+
 # Build
 npm run build
 ```
@@ -105,25 +111,189 @@ npm run build
 
 ```
 apps/
-├── backend/                 # FastAPI + Python
+├── backend/                    # FastAPI + Python 3.13+
 │   ├── app/
-│   │   ├── main.py          # Entry point
-│   │   ├── config.py        # Environment settings
-│   │   ├── database.py      # TinyDB wrapper
-│   │   ├── llm.py           # LiteLLM wrapper
-│   │   ├── routers/         # API endpoints
-│   │   ├── services/        # Business logic
-│   │   ├── schemas/         # Pydantic models
-│   │   └── prompts/         # LLM prompt templates
-│   └── data/                # Database storage
+│   │   ├── main.py             # Entry point, CORS, lifespan, router includes
+│   │   ├── config.py           # Settings (LLM, server, CORS, API key persistence)
+│   │   ├── database.py         # TinyDB wrapper (resumes, jobs, improvements tables)
+│   │   ├── llm.py              # LiteLLM wrapper (multi-provider, JSON extraction)
+│   │   ├── pdf.py              # Playwright PDF renderer (lazy-init, system Chrome detect)
+│   │   ├── routers/
+│   │   │   ├── health.py       # GET /health, GET /status
+│   │   │   ├── resumes.py      # CRUD + improve + PDF + cover letter + outreach
+│   │   │   ├── jobs.py         # Job description upload and retrieval
+│   │   │   ├── config.py       # LLM config, feature flags, language, prompts, API keys
+│   │   │   └── enrichment.py   # AI enrichment (feature flag controlled)
+│   │   ├── services/
+│   │   │   ├── parser.py       # PDF/DOCX→markdown, markdown→structured JSON
+│   │   │   ├── improver.py     # Resume tailoring, keyword extraction, diff calculation
+│   │   │   ├── refiner.py      # Multi-pass refinement (keyword injection, AI phrase removal, alignment)
+│   │   │   └── cover_letter.py # Cover letter, outreach message, title generation
+│   │   ├── schemas/
+│   │   │   ├── models.py       # Core Pydantic v2 models (ResumeData, responses, diffs)
+│   │   │   ├── enrichment.py   # Enrichment question/answer schemas
+│   │   │   └── refinement.py   # RefinementConfig, alignment report models
+│   │   └── prompts/
+│   │       ├── templates.py    # Resume/improve schema examples, prompt templates
+│   │       ├── refinement.py   # Keyword injection, AI phrase removal, alignment prompts
+│   │       └── enrichment.py   # Enrichment feature prompts
+│   ├── data/                   # TinyDB storage (database.json, config.json)
+│   └── pyproject.toml          # Python dependencies (uv)
 │
-└── frontend/                # Next.js + React
-    ├── app/                 # Pages (dashboard, builder, tailor, print)
-    ├── components/          # UI components
-    ├── lib/                 # Utilities, API client
-    ├── hooks/               # Custom React hooks
-    └── messages/            # i18n translations (en, es, zh, ja)
+└── frontend/                   # Next.js 16 + React 19
+    ├── app/
+    │   ├── (default)/
+    │   │   ├── page.tsx        # Home/landing page
+    │   │   ├── dashboard/      # Resume and job listing
+    │   │   ├── builder/        # Resume editor with drag-and-drop
+    │   │   ├── tailor/         # Job description + tailoring interface
+    │   │   ├── resumes/[id]/   # Resume detail view
+    │   │   └── settings/       # LLM config, feature flags, language
+    │   └── print/
+    │       ├── resumes/[id]/   # Resume PDF rendering page
+    │       └── cover-letter/[id]/ # Cover letter PDF rendering page
+    ├── components/
+    │   ├── builder/            # Resume builder (forms, drag-and-drop, template selector)
+    │   ├── resume/             # Resume templates (modern, single-column, two-column)
+    │   ├── ui/                 # Reusable primitives (button, input, dialog, rich-text-editor)
+    │   ├── enrichment/         # AI enrichment modal (question flow, preview)
+    │   ├── tailor/             # Diff preview modal
+    │   ├── settings/           # API key menu
+    │   ├── dashboard/          # Resume/job listing
+    │   ├── home/               # Hero section, feature grid
+    │   ├── preview/            # Print/preview components
+    │   └── common/             # Error boundary, resume previewer context
+    ├── lib/
+    │   ├── api/                # API client (client.ts, resume.ts, jobs.ts, enrichment.ts)
+    │   ├── i18n/               # Translation utilities, locale detection
+    │   ├── types/              # TypeScript types (template-settings.ts)
+    │   ├── utils/              # section-helpers, keyword-matcher, html-sanitizer, download
+    │   ├── context/            # language-context.tsx, status-cache.tsx
+    │   ├── config/             # version.ts
+    │   └── constants/          # page-dimensions.ts
+    ├── hooks/                  # Custom React hooks
+    ├── messages/               # i18n translations (en, es, zh, ja, pt-BR)
+    └── package.json            # Node dependencies
 ```
+
+---
+
+## API Routes Reference
+
+All routes prefixed with `/api/v1`:
+
+### Health
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/health` | LLM connectivity + basic health |
+| `GET` | `/status` | Full status: LLM config, master resume, DB stats |
+
+### Resumes
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/resumes/upload` | Upload PDF/DOCX → async parse to JSON |
+| `GET` | `/resumes/{id}` | Fetch resume + cover letter + outreach |
+| `GET` | `/resumes/list` | List all resumes (opt: include master) |
+| `DELETE` | `/resumes/{id}` | Delete resume |
+| `POST` | `/resumes/improve/preview` | Preview tailored resume (not persisted) |
+| `POST` | `/resumes/improve/confirm` | Persist previewed tailored resume |
+| `POST` | `/resumes/improve` | Preview + confirm in one call |
+| `GET` | `/resumes/{id}/pdf` | Generate PDF with template options |
+| `GET` | `/resumes/{id}/cover-letter/pdf` | Generate cover letter PDF |
+| `POST` | `/resumes/{id}/generate-cover-letter` | On-demand cover letter |
+| `POST` | `/resumes/{id}/generate-outreach` | On-demand outreach message |
+| `GET` | `/resumes/{id}/job-description` | Get original JD for tailored resume |
+| `PATCH` | `/resumes/{id}` | Update structured resume data |
+| `PATCH` | `/resumes/{id}/cover-letter` | Update cover letter text |
+| `PATCH` | `/resumes/{id}/outreach-message` | Update outreach message |
+| `PATCH` | `/resumes/{id}/title` | Update title (max 80 chars) |
+| `POST` | `/resumes/{id}/retry-processing` | Retry failed/stuck processing |
+
+### Jobs
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/jobs/upload` | Upload one or more job descriptions |
+| `GET` | `/jobs/{id}` | Get job description + cached keywords |
+
+### Config
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET/POST` | `/config/llm-api-key` | Get/set LLM provider, model, key |
+| `GET/POST` | `/config/feature-flags` | Get/set cover letter + outreach flags |
+| `GET/POST` | `/config/language` | Get/set content language |
+| `GET/POST` | `/config/prompt-options` | Get available prompts / set default |
+| `GET/POST` | `/config/api-keys` | Get all keys (masked) / update keys |
+| `DELETE` | `/config/api-keys/{provider}` | Remove provider key |
+| `POST` | `/config/reset-database` | Wipe all resumes, jobs, improvements |
+
+---
+
+## Data Models
+
+### ResumeData (core schema)
+```python
+ResumeData:
+├── personalInfo: {name, email, phone, location, links[]}
+├── summary: str
+├── workExperience[]: {company, position, years, description[], metadata?}
+├── education[]: {institution, degree, years, description[]}
+├── personalProjects[]: {name, description[], years?}
+├── additional: {technicalSkills[], certificationsTraining[], languages[], awards[]}
+└── customSections: dict[str, CustomSection]  # user-defined, LLM-protected
+```
+
+### Database Tables (TinyDB)
+```
+resumes: id, content, content_type, processed_data, is_master, parent_id,
+         processing_status, cover_letter, outreach_message, title,
+         original_markdown, created_at, updated_at
+
+jobs: id, content, resume_id?, job_keywords, job_keywords_hash,
+      preview_hash, preview_hashes{}, created_at
+
+improvements: id, original_resume_id, tailored_resume_id, job_id,
+              improvements[], created_at
+```
+
+---
+
+## Resume Tailoring Pipeline
+
+Understanding this flow is critical for working on the improve/refine code:
+
+```
+1. Extract job keywords (LLM)
+2. Improve resume with selected prompt (LLM)
+3. Preserve: personalInfo, dates, skills, custom sections
+4. Multi-pass refinement (services/refiner.py):
+   a. Keyword injection — insert missing job keywords
+   b. AI phrase removal — remove AI-sounding language
+   c. Alignment validation — ensure consistency with master
+5. Parallel generation: cover letter + outreach message + title
+6. Calculate diff (original vs tailored)
+7. Calculate keyword match percentage
+8. Persist (on confirm)
+```
+
+---
+
+## LLM Integration
+
+**Supported providers** (via LiteLLM): `openai`, `anthropic`, `gemini`, `openrouter`, `deepseek`, `ollama`
+
+**Timeouts**: health=30s, completion=120s, JSON=180s
+
+**Safety limits**: JSON depth max 10 levels, content max 1MB
+
+**Environment variables**:
+```bash
+LLM_PROVIDER=openai          # or anthropic, gemini, openrouter, deepseek, ollama
+LLM_MODEL=gpt-4o             # model identifier
+LLM_API_KEY=sk-...           # API key
+LLM_API_BASE=                # optional, for Ollama or custom proxy endpoints
+```
+
+API keys can also be set at runtime via `POST /api/v1/config/api-keys` and are persisted to `apps/backend/data/config.json`.
 
 ---
 
@@ -179,6 +349,20 @@ import copy
 data = copy.deepcopy(DEFAULT_DATA)  # Correct
 # data = DEFAULT_DATA  # Wrong - shared state bug
 ```
+
+### Async Concurrency (Python)
+Critical sections use `asyncio.Lock` — do not remove or bypass:
+```python
+# Used in: database.py (master resume), pdf.py (renderer init)
+async with self._lock:
+    # atomic operation here
+```
+
+### Personal Info & Date Preservation
+The tailoring pipeline always restores `personalInfo` and dates from the original markdown. Never allow LLM to overwrite these fields — see `services/improver.py` and `services/parser.py` (`restore_dates_from_markdown`).
+
+### Custom Section Protection
+Custom sections are user-defined and must not be modified by the LLM. If adding LLM operations that touch resume data, explicitly skip `customSections`.
 
 ---
 
